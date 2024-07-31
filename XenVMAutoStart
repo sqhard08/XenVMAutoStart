@@ -1,0 +1,91 @@
+#!/bin/bash
+
+# Список виртуальных машин, которые нужно автоматически запускать
+AUTO_START_VMS=(
+    "a0e8e43c-cd5d-8557-8ad5-19e8f56b1c6d"
+    "3ead5308-adce-d9ec-f369-3e4b102773c8"
+    "960ef891-7ac0-8e83-22c3-8a33f0a26774"
+    "94cd1680-24e1-e87d-2bde-ea478086febb"
+    "e446d70e-51c1-495a-88ba-68dd69dfd92b"
+    "aa016536-d4ef-f8f5-2708-f0b95b4c4ef9"
+    "91479392-94fa-88ab-94c8-852684062d2d"
+    "b331f6bd-765d-16de-8ddb-e17ba555bfda"
+    "44491ed1-ebb8-6d4a-e53c-85a4dce724d7"
+    "2c27f824-409b-1873-fb81-4e00df59fa36"
+    "0f07b2c3-b720-bedd-7c05-a538db4554e9"
+    "4c0cee8e-88be-02de-82d0-c6d9c5ff9858"
+    "2c37e7e5-fe12-1227-5a12-4a0883374187"
+    "766a1c08-7039-9bef-676f-419e7756ab7a"
+)
+
+# Журналирование
+LOG_FILE="/var/log/auto_start_vms.log"
+
+echo "Auto-start VMs script started at $(date)" >> "$LOG_FILE"
+
+# Функция для проверки доступности команды xe
+check_xe() {
+    until xe vm-list > /dev/null 2>&1; do
+        echo "Waiting for XenServer to become available..." >> "$LOG_FILE"
+        sleep 10
+    done
+    echo "XenServer is now available." >> "$LOG_FILE"
+}
+
+# Включение хоста XenServer
+enable_host() {
+    host_uuid=$(xe host-list --minimal)
+    xe host-enable uuid=$host_uuid
+    echo "Host $host_uuid enabled. Waiting for it to become fully operational..." >> "$LOG_FILE"
+    sleep 60  # Ждем 60 секунд
+}
+
+# Проверка статуса хоста
+check_host_status() {
+    host_uuid=$(xe host-list --minimal)
+    status=$(xe host-param-get uuid=$host_uuid param-name=enabled)
+    if [ "$status" = "true" ]; then
+        echo "Host is enabled and ready." >> "$LOG_FILE"
+        return 0
+    else
+        echo "Host is still not enabled. Trying again..." >> "$LOG_FILE"
+        return 1
+    fi
+}
+
+# Функция запуска ВМ с повторными попытками
+start_vm() {
+    local vm=$1
+    local max_attempts=5
+    local attempt=1
+
+    while [ $attempt -le $max_attempts ]; do
+        echo "Attempt $attempt to start VM: $vm" >> "$LOG_FILE"
+        if xe vm-start uuid="$vm" >> "$LOG_FILE" 2>&1; then
+            echo "VM $vm started successfully." >> "$LOG_FILE"
+            return 0
+        fi
+        echo "Failed to start VM $vm. Retrying in 30 seconds..." >> "$LOG_FILE"
+        sleep 30
+        ((attempt++))
+    done
+
+    echo "Failed to start VM $vm after $max_attempts attempts." >> "$LOG_FILE"
+    return 1
+}
+
+# Проверяем доступность XenServer перед запуском виртуальных машин
+check_xe
+
+# Включаем хост XenServer и проверяем его статус
+until check_host_status; do
+    enable_host
+    sleep 30
+done
+
+# Запуск виртуальных машин из списка
+for vm in "${AUTO_START_VMS[@]}"; do
+    start_vm "$vm"
+done
+
+echo "Auto-start VMs script finished at $(date)" >> "$LOG_FILE"
